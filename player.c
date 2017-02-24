@@ -81,6 +81,11 @@ static int cb(const void *inputBuffer, void *outputBuffer,
 	      const PaStreamCallbackTimeInfo *timeInfo,
 	      PaStreamCallbackFlags statusFlags, void *userData)
 {
+	(void)inputBuffer;
+	(void)timeInfo;
+	(void)statusFlags;
+	(void)userData;
+
 	static uint32_t frame = 0;
 	unsigned long i;
 	const uint32_t frames = wave_size / 2;
@@ -101,6 +106,8 @@ static int cb(const void *inputBuffer, void *outputBuffer,
 
 static void cb_stream_finished(void *userData)
 {
+	(void)userData;
+
 	wrap_mutex_lock(&terminate_mutex);
 
 	finished = true;
@@ -121,8 +128,7 @@ int main(int argc, char *argv[])
 	PaStream *stream;
 	PaError err;
 	int ret;
-	int i;
-	size_t size;
+	long int size;
 
 	if (argc < 2) {
 		print_usage(argv[0]);
@@ -163,7 +169,7 @@ int main(int argc, char *argv[])
 
 	size = fread(wave, 1, wave_size, fp);
 	if (size != wave_size) {
-		fprintf(stderr, "error reading file (%d)\n", size);
+		fprintf(stderr, "error reading file (%ld)\n", size);
 		exit(-1);
 	}
 

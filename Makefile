@@ -1,4 +1,6 @@
 CC=gcc
+
+CFLAGS= -Wall -Wextra -Werror
 LDFLAGS=-lportaudio -lpthread
 
 OBJ_DIR=obj
