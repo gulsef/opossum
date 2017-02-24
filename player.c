@@ -49,6 +49,11 @@
 #include <stdio.h>
 #include <stdlib.h>
 
+/*
+ * At 44.1kHz and 256 frames per buffer, the callback is called ~172 times
+ * per second.
+ */
+#define FRAMES_PER_BUFFER (256)
 #define SAMPLE_RATE (44100)
 
 #define WAV_HEADER_SIZE (44) /* bytes */
@@ -188,8 +193,8 @@ int main(int argc, char *argv[])
 	    Pa_GetDeviceInfo(params.device)->defaultLowOutputLatency;
 	params.hostApiSpecificStreamInfo = NULL;
 
-	err = Pa_OpenStream(&stream, NULL, &params, SAMPLE_RATE, 0, paClipOff,
-			    cb, NULL);
+	err = Pa_OpenStream(&stream, NULL, &params, SAMPLE_RATE,
+			    FRAMES_PER_BUFFER, paClipOff, cb, NULL);
 	if (err != paNoError)
 		goto error;
 
