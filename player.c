@@ -112,9 +112,9 @@ static void cb_stream_finished(void *userData)
 
 	finished = true;
 
-	int ret = pthread_cond_broadcast(&terminate_cond);
+	int ret = pthread_cond_signal(&terminate_cond);
 	if (ret) {
-		fprintf(stderr, "Cannot broadcast cond (err=%d)\n", ret);
+		fprintf(stderr, "Cannot signal cond (err=%d)\n", ret);
 	}
 
 	wrap_mutex_unlock(&terminate_mutex);
