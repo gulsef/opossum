@@ -1,9 +1,3 @@
-/** @file paex_sine.c
-	@ingroup examples_src
-	@brief Play a sine wave for several seconds.
-	@author Ross Bencina <rossb@audiomulch.com>
-    @author Phil Burk <philburk@softsynth.com>
-*/
 /*
  * $Id$
  *
@@ -41,6 +35,11 @@
  * requested that these non-binding requests be included along with the
  * license above.
  */
+
+/*
+ * Based on paex_sine.c example from the PortAudio repository.
+ */
+
 #include "portaudio.h"
 #include <assert.h>
 #include <pthread.h>
