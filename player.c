@@ -155,9 +155,9 @@ static void cb_stream_finished(void *userData)
 	wrap_mutex_unlock(&terminate_mutex);
 }
 
-void print_usage(char *name) { printf("Usage: %s inputfile\n", name); }
+static void print_usage(char *name) { printf("Usage: %s inputfile\n", name); }
 
-void *pcm_timer(void *t)
+static void *pcm_timer(void *t)
 {
 	(void)t;
 	int ret;
@@ -190,7 +190,7 @@ void *pcm_timer(void *t)
 	return NULL;
 }
 
-void *pcm_reader(void *t)
+static void *pcm_reader(void *t)
 {
 	int ret;
 	long int size;
