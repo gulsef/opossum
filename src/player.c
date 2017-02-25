@@ -40,7 +40,6 @@
  * Based on paex_sine.c example from the PortAudio repository.
  */
 
-#include "portaudio.h"
 #include <assert.h>
 #include <pthread.h>
 #include <stdatomic.h>
@@ -49,6 +48,8 @@
 #include <stdio.h>
 #include <stdlib.h>
 
+#include "portaudio.h"
+#include "wrapper.h"
 /*
  * At 44.1kHz and 256 frames per buffer, the callback is called ~172 times
  * per second.
@@ -84,22 +85,6 @@ static pthread_cond_t pcm_timer_cv = PTHREAD_COND_INITIALIZER;
 static volatile bool pcm_timer_expired;
 
 static volatile uint32_t underruns;
-
-static void wrap_mutex_lock(pthread_mutex_t *mutex)
-{
-	int ret = pthread_mutex_lock(mutex);
-	if (ret) {
-		fprintf(stderr, "Cannot lock mutex (err=%d).\n", ret);
-	}
-}
-
-static void wrap_mutex_unlock(pthread_mutex_t *mutex)
-{
-	int ret = pthread_mutex_unlock(mutex);
-	if (ret) {
-		fprintf(stderr, "Cannot unlock mutex (err=%d).\n", ret);
-	}
-}
 
 static int cb(const void *inputBuffer, void *outputBuffer,
 	      unsigned long framesPerBuffer,
