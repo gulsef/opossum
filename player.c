@@ -44,6 +44,7 @@
 #include "portaudio.h"
 #include <assert.h>
 #include <pthread.h>
+#include <stdatomic.h>
 #include <stdbool.h>
 #include <stdint.h>
 #include <stdio.h>
@@ -54,16 +55,32 @@
  * per second.
  */
 #define FRAMES_PER_BUFFER (256)
+
+/* Size of the frame ring buffer. Must be a power of two. */
+#define RB_FRAMES (16 * FRAMES_PER_BUFFER)
+
 #define SAMPLE_RATE (44100)
 
 #define WAV_HEADER_SIZE (44) /* bytes */
 
-static uint16_t *wave;
-static uint32_t wave_size;
-
 static volatile bool finished;
 static pthread_mutex_t terminate_mutex = PTHREAD_MUTEX_INITIALIZER;
 static pthread_cond_t terminate_cond = PTHREAD_COND_INITIALIZER;
+
+static volatile bool playback_ready;
+static pthread_mutex_t playback_mutex = PTHREAD_MUTEX_INITIALIZER;
+static pthread_cond_t playback_cond = PTHREAD_COND_INITIALIZER;
+
+/* The total number of PCM frames in the WAV file. */
+static uint32_t wave_frames;
+
+/* The ring buffer. Each ring buffer element holds a 16bit stereo frame. */
+static uint32_t rb[RB_FRAMES];
+
+/* Frames present in the ring buffer. */
+static _Atomic volatile int32_t frames_in_rb;
+
+static volatile uint32_t underruns;
 
 static void wrap_mutex_lock(pthread_mutex_t *mutex)
 {
@@ -91,18 +108,27 @@ static int cb(const void *inputBuffer, void *outputBuffer,
 	(void)statusFlags;
 	(void)userData;
 
+	/* Pointer to the oldest populated frame to be consumed by PortAudio. */
+	static uint32_t out;
+	/* Consumed frame (wrt the overall PCM file) */
 	static uint32_t frame = 0;
 	unsigned long i;
-	const uint32_t frames = wave_size / 2;
-	uint16_t *out = (uint16_t *)outputBuffer;
+	uint32_t *portaudio_buffer = (uint32_t *)outputBuffer;
 
-	for (i = 0; frame < frames && i < framesPerBuffer; i++) {
-		/* feed left then right */
-		*out++ = wave[frame++];
-		*out++ = wave[frame++];
+	for (i = 0; frame < wave_frames && i < framesPerBuffer; i++, frame++) {
+
+		if (frames_in_rb == 0) {
+			underruns++;
+		}
+
+		*portaudio_buffer++ = rb[out];
+
+		out = (out + 1) & (RB_FRAMES - 1);
+
+		__sync_fetch_and_sub(&frames_in_rb, 1);
 	}
 
-	if (frame == frames) {
+	if (frame == wave_frames) {
 		return paComplete;
 	}
 
@@ -125,22 +151,34 @@ static void cb_stream_finished(void *userData)
 	wrap_mutex_unlock(&terminate_mutex);
 }
 
+static void wait_pcm_reader_tick(void)
+{
+	const struct timespec tim_req = {
+	    .tv_sec = 0,
+	    .tv_nsec =
+		((float)FRAMES_PER_BUFFER / (float)SAMPLE_RATE) * 1000000000L,
+	};
+	struct timespec tim_rem;
+
+	if (nanosleep(&tim_req, &tim_rem) < 0) {
+		fprintf(stderr, "Can't set up PCM reader tick\n");
+		return;
+	}
+}
+
 void print_usage(char *name) { printf("Usage: %s inputfile\n", name); }
 
-int main(int argc, char *argv[])
+void *pcm_reader(void *t)
 {
-	PaStreamParameters params;
-	PaStream *stream;
-	PaError err;
 	int ret;
 	long int size;
+	uint32_t frame;
+	/* Pointer to the first empty frame to be produced by the PCM reader. */
+	uint32_t in = 0;
 
-	if (argc < 2) {
-		print_usage(argv[0]);
-		exit(-1);
-	}
+	char *path = (char *)t;
 
-	FILE *fp = fopen(argv[1], "rb");
+	FILE *fp = fopen(path, "rb");
 	if (fp == NULL) {
 		fprintf(stderr, "cannot open file\n");
 		exit(-1);
@@ -157,24 +195,78 @@ int main(int argc, char *argv[])
 		exit(-1);
 	}
 
+	/* sanity check: the file holds at least the WAV header, and the PCM
+	 * stream is a muiltiple of the frame size.
+	 */
 	assert(size >= WAV_HEADER_SIZE);
+	assert(((size - WAV_HEADER_SIZE) % sizeof(uint32_t)) == 0);
 
-	wave_size = size - WAV_HEADER_SIZE;
+	wave_frames = (size - WAV_HEADER_SIZE) / sizeof(uint32_t);
 	ret = fseek(fp, WAV_HEADER_SIZE, SEEK_SET);
 	if (ret) {
 		fprintf(stderr, "cannot fseek file\n");
 		exit(-1);
 	}
 
-	wave = (uint16_t *)malloc(wave_size);
-	if (wave == NULL) {
-		fprintf(stderr, "OOM\n");
-		exit(-1);
+	/* Fill up the ring buffer before kicking off the playback */
+	for (frame = 0; frame < wave_frames && frame < RB_FRAMES; frame++) {
+		size = fread(&rb[in], 1, sizeof(uint32_t), fp);
+		if (size != sizeof(uint32_t)) {
+			fprintf(stderr, "error reading file (%ld)\n", size);
+		}
+
+		in = (in + 1) & (RB_FRAMES - 1);
+
+		__sync_fetch_and_add(&frames_in_rb, 1);
 	}
 
-	size = fread(wave, 1, wave_size, fp);
-	if (size != wave_size) {
-		fprintf(stderr, "error reading file (%ld)\n", size);
+	/* Kick off the stream */
+
+	wrap_mutex_lock(&playback_mutex);
+	playback_ready = true;
+	ret = pthread_cond_signal(&playback_cond);
+	if (ret) {
+		fprintf(stderr, "Cannot signal cond (err=%d)\n", ret);
+	}
+	wrap_mutex_unlock(&playback_mutex);
+
+	while (1) {
+		// TODO the tick needs to come from a separate timer - not the
+		// same thread.
+		wait_pcm_reader_tick();
+
+		assert(frames_in_rb <= RB_FRAMES);
+
+		for (; frames_in_rb < RB_FRAMES && frame < wave_frames;
+		     frame++) {
+			size = fread(&rb[in], 1, sizeof(uint32_t), fp);
+			if (size != sizeof(uint32_t)) {
+				fprintf(stderr, "error reading file (%ld)\n",
+					size);
+			}
+
+			in = (in + 1) & (RB_FRAMES - 1);
+
+			__sync_fetch_and_add(&frames_in_rb, 1);
+		}
+	}
+
+	return NULL;
+}
+
+int main(int argc, char *argv[])
+{
+	PaStreamParameters params;
+	PaStream *stream;
+	PaError err;
+	int ret;
+	pthread_t pcm_reader_thread;
+
+	/* sanity check: ring buffer size must be a power of two */
+	assert((RB_FRAMES & (RB_FRAMES - 1)) == 0);
+
+	if (argc < 2) {
+		print_usage(argv[0]);
 		exit(-1);
 	}
 
@@ -202,6 +294,24 @@ int main(int argc, char *argv[])
 	if (err != paNoError)
 		goto error;
 
+	ret = pthread_create(&pcm_reader_thread, NULL, pcm_reader, argv[1]);
+	if (ret) {
+		fprintf(stderr, "Cannot create PCM reader thread.\n");
+	}
+
+	/*
+	 * Wait for PCM reader to fill up the ring buffer before kicking off
+	 * the playback.
+	 */
+	wrap_mutex_lock(&playback_mutex);
+	while (!playback_ready) {
+		ret = pthread_cond_wait(&playback_cond, &playback_mutex);
+		if (ret) {
+			fprintf(stderr, "Cannot wait on cond (err=%d)\n", ret);
+		}
+	}
+	wrap_mutex_unlock(&playback_mutex);
+
 	err = Pa_StartStream(stream);
 	if (err != paNoError)
 		goto error;
@@ -220,6 +330,8 @@ int main(int argc, char *argv[])
 		goto error;
 
 	Pa_Terminate();
+
+	printf("Underruns: %u\n", underruns);
 
 	return err;
 error:
