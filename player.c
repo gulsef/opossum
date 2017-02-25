@@ -80,6 +80,10 @@ static uint32_t rb[RB_FRAMES];
 /* Frames present in the ring buffer. */
 static _Atomic volatile int32_t frames_in_rb;
 
+static pthread_mutex_t pcm_timer_mutex = PTHREAD_MUTEX_INITIALIZER;
+static pthread_cond_t pcm_timer_cv = PTHREAD_COND_INITIALIZER;
+static volatile bool pcm_timer_expired;
+
 static volatile uint32_t underruns;
 
 static void wrap_mutex_lock(pthread_mutex_t *mutex)
@@ -151,8 +155,13 @@ static void cb_stream_finished(void *userData)
 	wrap_mutex_unlock(&terminate_mutex);
 }
 
-static void wait_pcm_reader_tick(void)
+void print_usage(char *name) { printf("Usage: %s inputfile\n", name); }
+
+void *pcm_timer(void *t)
 {
+	(void)t;
+	int ret;
+
 	const struct timespec tim_req = {
 	    .tv_sec = 0,
 	    .tv_nsec =
@@ -160,13 +169,26 @@ static void wait_pcm_reader_tick(void)
 	};
 	struct timespec tim_rem;
 
-	if (nanosleep(&tim_req, &tim_rem) < 0) {
-		fprintf(stderr, "Can't set up PCM reader tick\n");
-		return;
-	}
-}
+	while (1) {
+		if (nanosleep(&tim_req, &tim_rem) < 0) {
+			fprintf(stderr, "Can't set up PCM reader tick\n");
+		}
 
-void print_usage(char *name) { printf("Usage: %s inputfile\n", name); }
+		wrap_mutex_lock(&pcm_timer_mutex);
+
+		assert(pcm_timer_expired == false);
+		pcm_timer_expired = true;
+
+		ret = pthread_cond_signal(&pcm_timer_cv);
+		if (ret) {
+			fprintf(stderr, "Cannot signal cond (err=%d)\n", ret);
+		}
+
+		wrap_mutex_unlock(&pcm_timer_mutex);
+	}
+
+	return NULL;
+}
 
 void *pcm_reader(void *t)
 {
@@ -230,12 +252,28 @@ void *pcm_reader(void *t)
 	}
 	wrap_mutex_unlock(&playback_mutex);
 
+	/* Feed the ring buffer based on PCM timer tick */
+
 	while (1) {
-		// TODO the tick needs to come from a separate timer - not the
-		// same thread.
-		wait_pcm_reader_tick();
+		wrap_mutex_lock(&pcm_timer_mutex);
+
+		/* wait for next PCM tick */
+		while (pcm_timer_expired == false) {
+			ret =
+			    pthread_cond_wait(&pcm_timer_cv, &pcm_timer_mutex);
+			if (ret) {
+				fprintf(stderr,
+					"Cannot wait on cond (err=%d)\n", ret);
+			}
+		}
+
+		pcm_timer_expired = false;
+
+		wrap_mutex_unlock(&pcm_timer_mutex);
 
 		assert(frames_in_rb <= RB_FRAMES);
+
+		/* Refill the ring buffer */
 
 		for (; frames_in_rb < RB_FRAMES && frame < wave_frames;
 		     frame++) {
@@ -261,6 +299,7 @@ int main(int argc, char *argv[])
 	PaError err;
 	int ret;
 	pthread_t pcm_reader_thread;
+	pthread_t pcm_timer_thread;
 
 	/* sanity check: ring buffer size must be a power of two */
 	assert((RB_FRAMES & (RB_FRAMES - 1)) == 0);
@@ -294,9 +333,11 @@ int main(int argc, char *argv[])
 	if (err != paNoError)
 		goto error;
 
-	ret = pthread_create(&pcm_reader_thread, NULL, pcm_reader, argv[1]);
+	ret = 0;
+	ret |= pthread_create(&pcm_timer_thread, NULL, pcm_timer, NULL);
+	ret |= pthread_create(&pcm_reader_thread, NULL, pcm_reader, argv[1]);
 	if (ret) {
-		fprintf(stderr, "Cannot create PCM reader thread.\n");
+		fprintf(stderr, "Cannot create PCM reader/timer threads.\n");
 	}
 
 	/*
