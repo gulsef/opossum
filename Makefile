@@ -6,7 +6,7 @@ BIN_DIR=bin
 BIN_NAME=player
 
 CFLAGS= -Wall -Wextra -Werror
-LDFLAGS=-lportaudio -lpthread
+LDFLAGS= -lportaudio -lpthread
 
 C_FILES := $(wildcard $(SRC_DIR)/*.c)
 OBJ_FILES := $(addprefix $(OBJ_DIR)/,$(notdir $(C_FILES:.c=.o)))
