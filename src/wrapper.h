@@ -5,5 +5,6 @@
 
 void wrap_mutex_lock(pthread_mutex_t *mutex);
 void wrap_mutex_unlock(pthread_mutex_t *mutex);
+void wrap_barrier_wait(pthread_barrier_t *barrier);
 
 #endif

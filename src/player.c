@@ -71,6 +71,8 @@ static volatile bool playback_ready;
 static pthread_mutex_t playback_mutex = PTHREAD_MUTEX_INITIALIZER;
 static pthread_cond_t playback_cond = PTHREAD_COND_INITIALIZER;
 
+static pthread_barrier_t pthread_barrier;
+
 /* The total number of PCM frames in the WAV file. */
 static uint32_t wave_frames;
 
@@ -153,6 +155,8 @@ static void *pcm_timer(void *t)
 	};
 	struct timespec tim_rem;
 
+	wrap_barrier_wait(&pthread_barrier);
+
 	while (1) {
 		if (nanosleep(&tim_req, &tim_rem) < 0) {
 			fprintf(stderr, "Can't set up PCM reader tick\n");
@@ -225,6 +229,8 @@ static void *pcm_reader(void *t)
 
 		__sync_fetch_and_add(&frames_in_rb, 1);
 	}
+
+	wrap_barrier_wait(&pthread_barrier);
 
 	/* Kick off the stream */
 
@@ -316,6 +322,11 @@ int main(int argc, char *argv[])
 	err = Pa_SetStreamFinishedCallback(stream, &cb_stream_finished);
 	if (err != paNoError)
 		goto error;
+
+	ret = pthread_barrier_init(&pthread_barrier, NULL, 2);
+	if (ret) {
+		fprintf(stderr, "Cannot initialize pthread barrier\n");
+	}
 
 	ret = 0;
 	ret |= pthread_create(&pcm_timer_thread, NULL, pcm_timer, NULL);

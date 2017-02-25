@@ -17,3 +17,11 @@ void wrap_mutex_unlock(pthread_mutex_t *mutex)
 		fprintf(stderr, "Cannot unlock mutex (err=%d).\n", ret);
 	}
 }
+
+void wrap_barrier_wait(pthread_barrier_t *barrier)
+{
+	int ret = pthread_barrier_wait(barrier);
+	if (ret != 0 && ret != PTHREAD_BARRIER_SERIAL_THREAD) {
+		fprintf(stderr, "Cannot wait on barrier (err=%d)\n", ret);
+	}
+}
