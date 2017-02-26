@@ -57,7 +57,7 @@
 #define FRAMES_PER_BUFFER (256)
 
 /* Size of the ring buffer in frames. Must be a power of two. */
-#define RB_FRAMES (16 * FRAMES_PER_BUFFER)
+#define RB_FRAMES (32 * FRAMES_PER_BUFFER)
 
 #define SAMPLE_RATE (44100)
 
