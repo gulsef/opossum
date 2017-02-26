@@ -164,7 +164,6 @@ static void *pcm_timer(void *t)
 
 		wrap_mutex_lock(&pcm_timer_mutex);
 
-		assert(pcm_timer_expired == false);
 		pcm_timer_expired = true;
 
 		ret = pthread_cond_signal(&pcm_timer_cv);
