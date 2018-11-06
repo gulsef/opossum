@@ -3,7 +3,7 @@ CC=gcc
 SRC_DIR=src
 OBJ_DIR=obj
 BIN_DIR=bin
-BIN_NAME=player
+BIN_NAME=opossum
 
 CFLAGS= -Wall -Wextra -Werror
 LDFLAGS= -lportaudio -lpthread
